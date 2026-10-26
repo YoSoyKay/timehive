@@ -14,6 +14,7 @@ type Business = {
   logo_url: string | null;
   primary_color: string | null;
 };
+type Employee = { id: string; business_id: string; employee_number: string; full_name: string; email: string | null; is_active: boolean; created_at: string };
 type SessionUser = { id: string; email?: string };
 type WorkspaceTab = 'overview' | 'employees' | 'time' | 'settings';
 
@@ -33,6 +34,14 @@ function App() {
   const [selectedBusinessId, setSelectedBusinessId] = useState<string | null>(null);
   const [tab, setTab] = useState<WorkspaceTab>('overview');
   const [message, setMessage] = useState('');
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [employeesLoading, setEmployeesLoading] = useState(false);
+  const [employeeError, setEmployeeError] = useState('');
+  const [addingEmployee, setAddingEmployee] = useState(false);
+  const [employeeName, setEmployeeName] = useState('');
+  const [employeeNumber, setEmployeeNumber] = useState('');
+  const [employeeEmail, setEmployeeEmail] = useState('');
+  const [savingEmployee, setSavingEmployee] = useState(false);
 
   useEffect(() => {
     if (!db) { setAuthReady(true); return; }
@@ -91,6 +100,42 @@ function App() {
     })();
     return () => { active = false; };
   }, [user?.id]);
+
+  useEffect(() => {
+    if (!db || !user || !selectedBusinessId || tab !== 'employees' || !businesses.some(b => b.id === selectedBusinessId)) return;
+    let active = true;
+    setEmployeesLoading(true);
+    setEmployeeError('');
+    db.from('employees').select('id,business_id,employee_number,full_name,email,is_active,created_at')
+      .eq('business_id', selectedBusinessId).order('full_name')
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) { setEmployeeError(error.message); setEmployees([]); }
+        else setEmployees(data ?? []);
+        setEmployeesLoading(false);
+      });
+    return () => { active = false; };
+  }, [user?.id, selectedBusinessId, tab, businesses]);
+
+  async function addEmployee(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!db || !selectedBusiness || savingEmployee) return;
+    setSavingEmployee(true);
+    setEmployeeError('');
+    const { data, error } = await db.from('employees').insert({
+      business_id: selectedBusiness.id,
+      employee_number: employeeNumber.trim(),
+      full_name: employeeName.trim(),
+      email: employeeEmail.trim() || null,
+      is_active: true,
+    }).select('id,business_id,employee_number,full_name,email,is_active,created_at').single();
+    if (error) setEmployeeError(error.message + ' — Check the employee RLS setup instructions.');
+    else if (data) {
+      setEmployees(current => [...current, data].sort((a, b) => a.full_name.localeCompare(b.full_name)));
+      setEmployeeName(''); setEmployeeNumber(''); setEmployeeEmail(''); setAddingEmployee(false);
+    }
+    setSavingEmployee(false);
+  }
 
   const selectedBusiness = businesses.find(b => b.id === selectedBusinessId) ?? null;
 
@@ -177,9 +222,28 @@ function App() {
             )}
             {tab === 'employees' && (
               <div style={cardStyle}>
-                <h2 style={{ marginTop: 0 }}><Users size={21} /> Employees</h2>
-                <p>Employee onboarding is coming next. This preview does not create, edit or display employee records.</p>
-                <p className="footer">Next milestone: invite employees securely and assign them to this business.</p>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                  <div><h2 style={{ margin: 0 }}><Users size={21} /> Employees</h2><p style={{ marginBottom: 0 }}>Employee directory for {selectedBusiness.business_name}</p></div>
+                  <button type="button" className="primary" onClick={() => { setAddingEmployee(v => !v); setEmployeeError(''); }}>
+                    {addingEmployee ? 'Cancel' : '+ Add employee'}
+                  </button>
+                </div>
+                {addingEmployee && <form onSubmit={addEmployee} style={{ marginTop: 20, display: 'grid', gap: 12 }}>
+                  <label>Full name<input required maxLength={120} value={employeeName} onChange={e => setEmployeeName(e.target.value)} /></label>
+                  <label>Employee number<input required maxLength={50} value={employeeNumber} onChange={e => setEmployeeNumber(e.target.value)} /></label>
+                  <label>Email (optional)<input type="email" maxLength={254} value={employeeEmail} onChange={e => setEmployeeEmail(e.target.value)} /></label>
+                  <button className="primary" disabled={savingEmployee || !employeeName.trim() || !employeeNumber.trim()}>{savingEmployee ? 'Saving…' : 'Save employee'}</button>
+                  <p className="footer">This creates a staff directory record, not a login account. Secure employee invitations will be a separate step.</p>
+                </form>}
+                {employeeError && <p role="alert" style={{ color: '#ffb4a8' }}>Unable to complete employee request: {employeeError}</p>}
+                {employeesLoading ? <p>Loading employees…</p> : employees.length ? (
+                  <div style={{ marginTop: 20 }}>
+                    {employees.map(employee => <div className="info" key={employee.id} style={{ alignItems: 'flex-start', gap: 12 }}>
+                      <span style={{ display: 'grid', gap: 3 }}><strong>{employee.full_name}</strong><small>#{employee.employee_number} · {employee.email || 'No email'}</small></span>
+                      <strong style={{ color: employee.is_active ? '#b8e5c5' : '#c6cbd3' }}>{employee.is_active ? 'Active' : 'Inactive'}</strong>
+                    </div>)}
+                  </div>
+                ) : !employeeError && <p style={{ marginTop: 20 }}>No employees yet. Add your first employee to get started.</p>}
               </div>
             )}
             {tab === 'time' && (
@@ -217,7 +281,7 @@ function App() {
               </button>
             )) : <p>No business administrator assignments found.</p>}
             {!isPlatformAdmin && businesses.length === 0 && <p>No administrator access is assigned to this account.</p>}
-            <p className="footer">Business workspaces are read-only previews. Employee management and clock-ins are not enabled yet.</p>
+            <p className="footer">Employee directory is available. Time tracking and employee login invitations are coming next.</p>
           </section>
         )}
         {message && <p className="status" role="status">{message}</p>}
