@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createClient } from '@supabase/supabase-js';
-import { Hexagon, LogOut, Shield, Building2 } from 'lucide-react';
+import { Hexagon, LogOut, Shield, Building2, ArrowLeft, Users, Clock3, Settings, LayoutDashboard, ChevronRight, MapPin } from 'lucide-react';
 import './style.css';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -14,8 +14,12 @@ type Business = {
   logo_url: string | null;
   primary_color: string | null;
 };
-
 type SessionUser = { id: string; email?: string };
+type WorkspaceTab = 'overview' | 'employees' | 'time' | 'settings';
+
+const gold = '#efb83e';
+const cardStyle: React.CSSProperties = { border: '1px solid #384253', borderRadius: 16, padding: 20, background: '#232b38' };
+const navStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 9, padding: '12px 15px', borderRadius: 10, cursor: 'pointer', font: 'inherit', textAlign: 'left' };
 
 function App() {
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -26,6 +30,8 @@ function App() {
   const [loadingRoles, setLoadingRoles] = useState(false);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [businesses, setBusinesses] = useState<Business[]>([]);
+  const [selectedBusinessId, setSelectedBusinessId] = useState<string | null>(null);
+  const [tab, setTab] = useState<WorkspaceTab>('overview');
   const [message, setMessage] = useState('');
 
   useEffect(() => {
@@ -47,6 +53,7 @@ function App() {
     if (!db || !user) {
       setIsPlatformAdmin(false);
       setBusinesses([]);
+      setSelectedBusinessId(null);
       return;
     }
     let active = true;
@@ -65,8 +72,7 @@ function App() {
         if (ids.length) {
           const result = await db.from('businesses')
             .select('id,business_name,logo_url,primary_color')
-            .in('id', ids)
-            .order('business_name');
+            .in('id', ids).order('business_name');
           if (result.error) throw result.error;
           assignedBusinesses = result.data ?? [];
         }
@@ -86,11 +92,12 @@ function App() {
     return () => { active = false; };
   }, [user?.id]);
 
+  const selectedBusiness = businesses.find(b => b.id === selectedBusinessId) ?? null;
+
   async function signIn(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!db) return;
-    setBusy(true);
-    setMessage('');
+    setBusy(true); setMessage('');
     const { error } = await db.auth.signInWithPassword({ email, password });
     if (error) setMessage(error.message);
     setBusy(false);
@@ -104,8 +111,20 @@ function App() {
     setBusy(false);
   }
 
+  function openBusiness(id: string) {
+    setSelectedBusinessId(id);
+    setTab('overview');
+  }
+
+  const tabs: { id: WorkspaceTab; label: string; Icon: typeof LayoutDashboard }[] = [
+    { id: 'overview', label: 'Overview', Icon: LayoutDashboard },
+    { id: 'employees', label: 'Employees', Icon: Users },
+    { id: 'time', label: 'Time records', Icon: Clock3 },
+    { id: 'settings', label: 'Business settings', Icon: Settings },
+  ];
+
   return (
-    <main style={{ '--accent': '#efb83e' } as React.CSSProperties}>
+    <main style={{ '--accent': gold } as React.CSSProperties}>
       <div className="shell">
         <header>
           <div className="brand"><Hexagon size={30} /><strong>Time<span>Hive</span></strong></div>
@@ -126,28 +145,80 @@ function App() {
               <button className="primary" disabled={busy}>Sign in</button>
             </form>
           </section>
+        ) : loadingRoles ? (
+          <section className="panel"><h2>Checking your access...</h2></section>
+        ) : selectedBusiness ? (
+          <section className="panel" style={{ maxWidth: 1050 }}>
+            <button className="textbtn" onClick={() => setSelectedBusinessId(null)} style={{ marginBottom: 18 }}><ArrowLeft size={17} /> All businesses</button>
+            <div className="eyebrow">BUSINESS WORKSPACE</div>
+            <h1 style={{ marginBottom: 8 }}>{selectedBusiness.business_name}</h1>
+            <p>Manage this business from one place.</p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: '26px 0' }} role="navigation" aria-label="Business workspace">
+              {tabs.map(({ id, label, Icon }) => (
+                <button key={id} onClick={() => setTab(id)} aria-current={tab === id ? 'page' : undefined}
+                  style={{ ...navStyle, background: tab === id ? gold : '#293241', color: tab === id ? '#1d2430' : '#e6e9ef', border: '1px solid #485161', fontWeight: tab === id ? 700 : 500 }}>
+                  <Icon size={17} /> {label}
+                </button>
+              ))}
+            </div>
+            {tab === 'overview' && (
+              <div style={{ display: 'grid', gap: 16 }}>
+                <div style={cardStyle}>
+                  <h2 style={{ marginTop: 0 }}>Business overview</h2>
+                  <p>{selectedBusiness.business_name} is connected to your TimeHive administrator account.</p>
+                  <div className="info"><span><Shield size={17} /> Your access</span><strong>Business administrator</strong></div>
+                  <div className="info"><span><MapPin size={17} /> Clock-in model</span><strong>Mobile / anywhere (planned)</strong></div>
+                </div>
+                <div style={cardStyle}>
+                  <h2 style={{ marginTop: 0 }}>Next up</h2>
+                  <p>Employee onboarding, secure GPS clock-ins and time reports will be enabled in later updates after database permissions and server-side time recording are verified.</p>
+                </div>
+              </div>
+            )}
+            {tab === 'employees' && (
+              <div style={cardStyle}>
+                <h2 style={{ marginTop: 0 }}><Users size={21} /> Employees</h2>
+                <p>Employee onboarding is coming next. This preview does not create, edit or display employee records.</p>
+                <p className="footer">Next milestone: invite employees securely and assign them to this business.</p>
+              </div>
+            )}
+            {tab === 'time' && (
+              <div style={cardStyle}>
+                <h2 style={{ marginTop: 0 }}><Clock3 size={21} /> Time records</h2>
+                <p>Timesheets and GPS clock-in history will appear here after secure recording and access rules are implemented.</p>
+                <p className="footer">No time entries are being created or modified by this preview.</p>
+              </div>
+            )}
+            {tab === 'settings' && (
+              <div style={cardStyle}>
+                <h2 style={{ marginTop: 0 }}><Settings size={21} /> Business settings</h2>
+                <div className="info"><span>Business name</span><strong>{selectedBusiness.business_name}</strong></div>
+                <div className="info"><span>Business ID</span><span style={{ overflowWrap: 'anywhere', textAlign: 'right' }}>{selectedBusiness.id}</span></div>
+                <div className="info"><span>Brand color</span><strong>{selectedBusiness.primary_color ?? 'Not configured'}</strong></div>
+                <p className="footer">Read-only settings preview. Branding edits will come later.</p>
+              </div>
+            )}
+          </section>
         ) : (
-          <>
-            <section className="panel">
-              <div className="eyebrow">TIMEHIVE ADMINISTRATION</div>
-              <h1>Welcome to the hive.</h1>
-              <p>Signed in as {user.email ?? 'your account'}</p>
-              {loadingRoles ? <p>Checking your access...</p> : (
-                <>
-                  {isPlatformAdmin && <div className="info"><span><Shield size={17} /> Platform administrator</span><strong>Verified</strong></div>}
-                  <h2><Building2 size={21} /> Your businesses</h2>
-                  {businesses.length ? businesses.map(business => (
-                    <div className="info" key={business.id}>
-                      <span>{business.logo_url ? <img src={business.logo_url} alt="" width={32} height={32} /> : <Building2 size={20} />}</span>
-                      <strong>{business.business_name}</strong>
-                    </div>
-                  )) : <p>No business administrator assignments found.</p>}
-                  {!isPlatformAdmin && businesses.length === 0 && <p>No administrator access is assigned to this account.</p>}
-                  <p className="footer">Read-only preview. Employee management and clock-ins are not enabled yet.</p>
-                </>
-              )}
-            </section>
-          </>
+          <section className="panel">
+            <div className="eyebrow">TIMEHIVE ADMINISTRATION</div>
+            <h1>Welcome to the hive.</h1>
+            <p>Signed in as {user.email ?? 'your account'}</p>
+            {isPlatformAdmin && <div className="info"><span><Shield size={17} /> Platform administrator</span><strong>Verified</strong></div>}
+            <h2><Building2 size={21} /> Your businesses</h2>
+            {businesses.length ? businesses.map(business => (
+              <button key={business.id} type="button" onClick={() => openBusiness(business.id)}
+                style={{ display: 'flex', width: '100%', justifyContent: 'space-between', alignItems: 'center', gap: 15, padding: '18px 8px', background: 'transparent', border: 0, borderBottom: '1px solid #384253', color: 'inherit', cursor: 'pointer', font: 'inherit', textAlign: 'left' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  {business.logo_url ? <img src={business.logo_url} alt="" width={32} height={32} /> : <Building2 size={24} />}
+                  <strong>{business.business_name}</strong>
+                </span>
+                <ChevronRight size={20} />
+              </button>
+            )) : <p>No business administrator assignments found.</p>}
+            {!isPlatformAdmin && businesses.length === 0 && <p>No administrator access is assigned to this account.</p>}
+            <p className="footer">Business workspaces are read-only previews. Employee management and clock-ins are not enabled yet.</p>
+          </section>
         )}
         {message && <p className="status" role="status">{message}</p>}
       </div>
