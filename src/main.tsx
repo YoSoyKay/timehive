@@ -1,3 +1,4 @@
+```
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createClient } from '@supabase/supabase-js';
@@ -44,6 +45,19 @@ function App() {
   const [savingEmployee, setSavingEmployee] = useState(false);
   const [invitingEmployeeId, setInvitingEmployeeId] = useState<string | null>(null);
   const [invitationNotice, setInvitationNotice] = useState('');
+  const [activation, setActivation] = useState(() => {
+    const hash = new URLSearchParams(window.location.hash.slice(1));
+    const query = new URLSearchParams(window.location.search);
+    return hash.get('type') === 'invite' || hash.get('type') === 'recovery' || query.get('type') === 'invite' || query.get('type') === 'recovery';
+  });
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [employeeProfile, setEmployeeProfile] = useState<{full_name:string;employee_number:string;business_id:string}|null>(null);
+  const [accessError, setAccessError] = useState('');
+  const [roleReady, setRoleReady] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [showReset, setShowReset] = useState(false);
+  const [activationVerified, setActivationVerified] = useState(false);
 
   useEffect(() => {
     if (!db) { setAuthReady(true); return; }
@@ -53,9 +67,25 @@ function App() {
       if (error) setMessage(error.message);
       setUser(data.session?.user ?? null);
       setAuthReady(true);
+      const hash = new URLSearchParams(window.location.hash.slice(1));
+      if (data.session && (hash.get('type') === 'invite' || hash.get('type') === 'recovery')) {
+        setActivationVerified(true);
+      }
     });
-    const { data: { subscription } } = db.auth.onAuthStateChange((_event, session) => {
-      if (active) { setUser(session?.user ?? null); setAuthReady(true); }
+    const { data: { subscription } } = db.auth.onAuthStateChange((event, session) => {
+      if (!active) return;
+      setUser(session?.user ?? null);
+      setAuthReady(true);
+      if (event === 'PASSWORD_RECOVERY') {
+        setActivation(true);
+        setActivationVerified(Boolean(session));
+      } else if (event === 'SIGNED_IN' && session) {
+        const params = new URLSearchParams(window.location.hash.slice(1));
+        if (params.get('type') === 'invite' || params.get('type') === 'recovery') {
+          setActivation(true);
+          setActivationVerified(true);
+        }
+      }
     });
     return () => { active = false; subscription.unsubscribe(); };
   }, []);
@@ -65,10 +95,15 @@ function App() {
       setIsPlatformAdmin(false);
       setBusinesses([]);
       setSelectedBusinessId(null);
+      setEmployeeProfile(null);
+      setLoadingRoles(false);
+      setRoleReady(false);
       return;
     }
     let active = true;
     setLoadingRoles(true);
+    setAccessError('');
+    setRoleReady(false);
     setMessage('');
     (async () => {
       try {
@@ -87,7 +122,13 @@ function App() {
           if (result.error) throw result.error;
           assignedBusinesses = result.data ?? [];
         }
+        const employeeResult = await db.from('employees')
+          .select('full_name,employee_number,business_id')
+          .eq('auth_user_id', user.id).eq('is_active', true).maybeSingle();
+        // Employee RLS must permit authenticated staff to read only their own row.
+        if (employeeResult.error) throw employeeResult.error;
         if (active) {
+          setEmployeeProfile(employeeResult.data ?? null);
           setIsPlatformAdmin(Boolean(platformResult.data));
           setBusinesses(assignedBusinesses);
           if (ids.length !== assignedBusinesses.length) {
@@ -95,9 +136,9 @@ function App() {
           }
         }
       } catch (error) {
-        if (active) setMessage('Could not load administrator access: ' + (error instanceof Error ? error.message : String(error)));
+        if (active) setAccessError('Could not verify account access: ' + (error instanceof Error ? error.message : String(error)));
       } finally {
-        if (active) setLoadingRoles(false);
+        if (active) { setLoadingRoles(false); setRoleReady(true); }
       }
     })();
     return () => { active = false; };
@@ -187,6 +228,38 @@ function App() {
     setBusy(false);
   }
 
+  async function activateAccount(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!db || busy || !activationVerified) return;
+    if (newPassword.length < 12) { setMessage('Choose a password with at least 12 characters.'); return; }
+    if (newPassword !== confirmPassword) { setMessage('Passwords do not match.'); return; }
+    setBusy(true); setMessage('');
+    const { data: sessionData } = await db.auth.getSession();
+    if (!sessionData.session) {
+      setMessage('This activation link has expired or has already been used. Request a new password setup email.');
+      setBusy(false); return;
+    }
+    const { error } = await db.auth.updateUser({ password: newPassword });
+    if (error) setMessage(error.message);
+    else {
+      setActivation(false); setActivationVerified(false); setNewPassword(''); setConfirmPassword('');
+      window.history.replaceState({}, '', window.location.pathname);
+      setMessage('Password created. Your account is ready.');
+    }
+    setBusy(false);
+  }
+
+  async function requestPasswordReset(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!db || busy) return;
+    setBusy(true); setMessage('');
+    const { error } = await db.auth.resetPasswordForEmail(resetEmail.trim(), {
+      redirectTo: 'https://timehive-rho.vercel.app/',
+    });
+    setMessage(error ? error.message : 'If this email has an account, a password setup link will arrive shortly.');
+    setBusy(false);
+  }
+
   function openBusiness(id: string) {
     setSelectedBusinessId(id);
     setTab('overview');
@@ -210,6 +283,25 @@ function App() {
           <section className="panel"><h2>TimeHive configuration needed</h2><p>Check your Vercel Supabase environment variables.</p></section>
         ) : !authReady ? (
           <section className="panel"><h2>Loading TimeHive...</h2></section>
+        ) : activation ? (
+          <section className="panel">
+            <div className="eyebrow">EMPLOYEE ACCOUNT SETUP</div>
+            <h1>Create your password.</h1>
+            {user && activationVerified ? <>
+              <p>Secure your TimeHive account to continue.</p>
+              <form onSubmit={activateAccount}>
+                <label>New password (12+ characters)<input type="password" autoComplete="new-password" minLength={12} required value={newPassword} onChange={e => setNewPassword(e.target.value)} /></label>
+                <label>Confirm password<input type="password" autoComplete="new-password" required value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} /></label>
+                <button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Create password'}</button>
+              </form>
+            </> : <>
+              <p>This activation link is expired or could not be verified. Request a fresh password setup email below.</p>
+              <form onSubmit={requestPasswordReset}>
+                <label>Employee email<input type="email" required value={resetEmail} onChange={e => setResetEmail(e.target.value)} /></label>
+                <button className="primary" disabled={busy}>Send password setup email</button>
+              </form>
+            </>}
+          </section>
         ) : !user ? (
           <section className="panel">
             <div className="eyebrow">WELCOME TO THE HIVE</div>
@@ -220,9 +312,28 @@ function App() {
               <label>Password<input type="password" value={password} onChange={e => setPassword(e.target.value)} required /></label>
               <button className="primary" disabled={busy}>Sign in</button>
             </form>
+            <button type="button" className="textbtn" onClick={() => setShowReset(v => !v)} style={{ marginTop: 16 }}>Forgot password / Employee setup</button>
+            {showReset && <form onSubmit={requestPasswordReset} style={{ marginTop: 12 }}>
+              <label>Account email<input type="email" required value={resetEmail} onChange={e => setResetEmail(e.target.value)} /></label>
+              <button className="primary" disabled={busy}>Email password setup link</button>
+            </form>}
           </section>
-        ) : loadingRoles ? (
+        ) : loadingRoles || !roleReady ? (
           <section className="panel"><h2>Checking your access...</h2></section>
+        ) : accessError ? (
+          <section className="panel"><h2>Unable to verify access</h2><p role="alert">{accessError}</p></section>
+        ) : roleReady && !isPlatformAdmin && businesses.length === 0 && employeeProfile ? (
+          <section className="panel">
+            <div className="eyebrow">EMPLOYEE WORKSPACE</div>
+            <h1>Welcome, {employeeProfile.full_name}.</h1>
+            <p>Employee #{employeeProfile.employee_number}</p>
+            <div style={cardStyle}>
+              <h2><Clock3 size={21} /> Time clock</h2>
+              <p>You're signed in to your employee account.</p>
+              <button className="primary" disabled title="Secure clock-in service is not enabled yet">Clock in — coming soon</button>
+              <p className="footer">GPS clock-ins will become available after the secure time-entry service is configured.</p>
+            </div>
+          </section>
         ) : selectedBusiness ? (
           <section className="panel" style={{ maxWidth: 1050 }}>
             <button className="textbtn" onClick={() => setSelectedBusinessId(null)} style={{ marginBottom: 18 }}><ArrowLeft size={17} /> All businesses</button>
@@ -317,7 +428,7 @@ function App() {
                 <ChevronRight size={20} />
               </button>
             )) : <p>No business administrator assignments found.</p>}
-            {!isPlatformAdmin && businesses.length === 0 && <p>No administrator access is assigned to this account.</p>}
+            {!isPlatformAdmin && businesses.length === 0 && <p>Your account has no linked active employee record or administrator assignment. Contact your TimeHive administrator.</p>}
             <p className="footer">Employee directory is available. Time tracking and employee login invitations are coming next.</p>
           </section>
         )}
@@ -328,3 +439,4 @@ function App() {
 }
 
 createRoot(document.getElementById('root')!).render(<App />);
+```
