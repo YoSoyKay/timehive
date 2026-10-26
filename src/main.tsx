@@ -42,6 +42,8 @@ function App() {
   const [employeeNumber, setEmployeeNumber] = useState('');
   const [employeeEmail, setEmployeeEmail] = useState('');
   const [savingEmployee, setSavingEmployee] = useState(false);
+  const [invitingEmployeeId, setInvitingEmployeeId] = useState<string | null>(null);
+  const [invitationNotice, setInvitationNotice] = useState('');
 
   useEffect(() => {
     if (!db) { setAuthReady(true); return; }
@@ -135,6 +137,35 @@ function App() {
       setEmployeeName(''); setEmployeeNumber(''); setEmployeeEmail(''); setAddingEmployee(false);
     }
     setSavingEmployee(false);
+  }
+
+  async function sendEmployeeInvitation(employee: Employee) {
+    if (!db || invitingEmployeeId) return;
+    setInvitingEmployeeId(employee.id);
+    setEmployeeError('');
+    setInvitationNotice('');
+    try {
+      const { data: sessionData, error: sessionError } = await db.auth.getSession();
+      if (sessionError || !sessionData.session?.access_token) throw new Error('Please sign in again before sending invitations.');
+      const { data, error } = await db.functions.invoke('invite-employee', {
+        body: { employee_id: employee.id },
+        headers: { Authorization: `Bearer ${sessionData.session.access_token}` },
+      });
+      if (error) {
+        let detail = error.message;
+        const response = (error as { context?: Response }).context;
+        if (response && typeof response.json === 'function') {
+          try { const payload = await response.json(); detail = payload?.error || detail; } catch { /* keep original error */ }
+        }
+        throw new Error(detail);
+      }
+      if (!data?.success) throw new Error(data?.error || 'Invitation was not confirmed.');
+      setInvitationNotice(`Invitation requested for ${employee.full_name}. Check their inbox.`);
+    } catch (error) {
+      setEmployeeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setInvitingEmployeeId(null);
+    }
   }
 
   const selectedBusiness = businesses.find(b => b.id === selectedBusinessId) ?? null;
@@ -233,14 +264,20 @@ function App() {
                   <label>Employee number<input required maxLength={50} value={employeeNumber} onChange={e => setEmployeeNumber(e.target.value)} /></label>
                   <label>Email (optional)<input type="email" maxLength={254} value={employeeEmail} onChange={e => setEmployeeEmail(e.target.value)} /></label>
                   <button className="primary" disabled={savingEmployee || !employeeName.trim() || !employeeNumber.trim()}>{savingEmployee ? 'Saving…' : 'Save employee'}</button>
-                  <p className="footer">This creates a staff directory record, not a login account. Secure employee invitations will be a separate step.</p>
+                  <p className="footer">This creates a staff record. Use Send invitation beside the employee to test email onboarding. Automatic invitations are the next step.</p>
                 </form>}
+                {invitationNotice && <p role="status" style={{ color: '#b8e5c5' }}>{invitationNotice}</p>}
                 {employeeError && <p role="alert" style={{ color: '#ffb4a8' }}>Unable to complete employee request: {employeeError}</p>}
                 {employeesLoading ? <p>Loading employees…</p> : employees.length ? (
                   <div style={{ marginTop: 20 }}>
                     {employees.map(employee => <div className="info" key={employee.id} style={{ alignItems: 'flex-start', gap: 12 }}>
                       <span style={{ display: 'grid', gap: 3 }}><strong>{employee.full_name}</strong><small>#{employee.employee_number} · {employee.email || 'No email'}</small></span>
-                      <strong style={{ color: employee.is_active ? '#b8e5c5' : '#c6cbd3' }}>{employee.is_active ? 'Active' : 'Inactive'}</strong>
+                      <span style={{ display: 'grid', justifyItems: 'end', gap: 8 }}>
+                        <strong style={{ color: employee.is_active ? '#b8e5c5' : '#c6cbd3' }}>{employee.is_active ? 'Active' : 'Inactive'}</strong>
+                        {employee.is_active && employee.email && <button type="button" disabled={Boolean(invitingEmployeeId)} onClick={() => sendEmployeeInvitation(employee)} style={{ padding: '8px 12px', borderRadius: 8, background: gold, color: '#1d2430', border: 0, cursor: 'pointer', fontWeight: 700 }}>
+                          {invitingEmployeeId === employee.id ? 'Sending…' : 'Send invitation'}
+                        </button>}
+                      </span>
                     </div>)}
                   </div>
                 ) : !employeeError && <p style={{ marginTop: 20 }}>No employees yet. Add your first employee to get started.</p>}
