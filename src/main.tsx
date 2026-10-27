@@ -265,7 +265,7 @@ function App() {
       if (sessionError || !sessionData.session?.access_token) {
         throw new Error('Your session has expired. Please sign in again.');
       }
-      const { data, error } = await db.functions.invoke('employee-clock', {
+      const { data, error } = await db.functions.invoke('quick-processor', {
         body: { action },
         headers: { Authorization: `Bearer ${sessionData.session.access_token}` },
       });
