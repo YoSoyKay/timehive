@@ -57,6 +57,10 @@ function App() {
   const [resetEmail, setResetEmail] = useState('');
   const [showReset, setShowReset] = useState(false);
   const [activationVerified, setActivationVerified] = useState(false);
+  const [clockBusy, setClockBusy] = useState(false);
+  const [clockNotice, setClockNotice] = useState('');
+  const [clockError, setClockError] = useState('');
+  const [lastClockEntry, setLastClockEntry] = useState<{ clock_in: string; clock_out: string | null } | null>(null);
 
   useEffect(() => {
     if (!db) { setAuthReady(true); return; }
@@ -95,6 +99,9 @@ function App() {
       setBusinesses([]);
       setSelectedBusinessId(null);
       setEmployeeProfile(null);
+      setLastClockEntry(null);
+      setClockNotice('');
+      setClockError('');
       setLoadingRoles(false);
       setRoleReady(false);
       return;
@@ -248,6 +255,43 @@ function App() {
     setBusy(false);
   }
 
+  async function recordClockAction(action: 'clock_in' | 'clock_out') {
+    if (!db || !user || clockBusy) return;
+    setClockBusy(true);
+    setClockNotice('');
+    setClockError('');
+    try {
+      const { data: sessionData, error: sessionError } = await db.auth.getSession();
+      if (sessionError || !sessionData.session?.access_token) {
+        throw new Error('Your session has expired. Please sign in again.');
+      }
+      const { data, error } = await db.functions.invoke('employee-clock', {
+        body: { action },
+        headers: { Authorization: `Bearer ${sessionData.session.access_token}` },
+      });
+      if (error) {
+        let detail = error.message;
+        const response = (error as { context?: Response }).context;
+        if (response && typeof response.json === 'function') {
+          try {
+            const payload = await response.json();
+            detail = typeof payload?.error === 'string' ? payload.error : detail;
+          } catch { /* Preserve the original error. */ }
+        }
+        throw new Error(detail);
+      }
+      if (!data?.success || !data?.entry) {
+        throw new Error(data?.error || 'The clock action could not be confirmed.');
+      }
+      setLastClockEntry({ clock_in: data.entry.clock_in, clock_out: data.entry.clock_out });
+      setClockNotice(action === 'clock_in' ? 'Clock-in recorded successfully.' : 'Clock-out recorded successfully.');
+    } catch (error) {
+      setClockError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setClockBusy(false);
+    }
+  }
+
   async function requestPasswordReset(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!db || busy) return;
@@ -329,8 +373,22 @@ function App() {
             <div style={cardStyle}>
               <h2><Clock3 size={21} /> Time clock</h2>
               <p>You're signed in to your employee account.</p>
-              <button className="primary" disabled title="Secure clock-in service is not enabled yet">Clock in — coming soon</button>
-              <p className="footer">GPS clock-ins will become available after the secure time-entry service is configured.</p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, margin: '18px 0' }}>
+                <button type="button" className="primary" disabled={clockBusy} onClick={() => recordClockAction('clock_in')}>
+                  {clockBusy ? 'Please wait…' : 'Clock in'}
+                </button>
+                <button type="button" disabled={clockBusy} onClick={() => recordClockAction('clock_out')}
+                  style={{ padding: '12px 20px', borderRadius: 10, background: '#354256', color: '#ffffff', border: '1px solid #657185', cursor: clockBusy ? 'wait' : 'pointer', font: 'inherit' }}>
+                  Clock out
+                </button>
+              </div>
+              {clockNotice && <p role="status" style={{ color: '#b8e5c5' }}>{clockNotice}</p>}
+              {clockError && <p role="alert" style={{ color: '#ffb4a8' }}>{clockError}</p>}
+              {lastClockEntry && <div className="info" style={{ display: 'grid', gap: 6 }}>
+                <span>Last confirmed clock-in: {new Date(lastClockEntry.clock_in).toLocaleString()}</span>
+                <span>{lastClockEntry.clock_out ? `Last confirmed clock-out: ${new Date(lastClockEntry.clock_out).toLocaleString()}` : 'This session: clocked in'}</span>
+              </div>}
+              <p className="footer">Clock times are recorded by the server. Current shift status is not yet loaded after a page refresh. GPS verification and breaks are not enabled.</p>
             </div>
           </section>
         ) : selectedBusiness ? (
